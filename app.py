@@ -54,22 +54,15 @@ venerdì 7 agosto 2026;NAPOLI;FIRENZE;473;4 H 48';1
 sabato 8 agosto 2026;FIRENZE;MILANO;318;3H23';
 """
 
-# ✅ FIXED COORDINATES
-# - Taormina: east coast of Sicily (correct)
-# - Gole Alcantara: just west/inland of Taormina (correct)  
-# - Cefalù: north coast of Sicily (correct)
-# - Ferry: Napoli Porto ↔ Palermo Porto
+# ✅ COORDINATES
 COORDINATES = {
     "MILANO": {"lat": 45.4642, "lon": 9.1900},
     "TERRANUOVA BRACCIOLINI": {"lat": 43.5500, "lon": 11.5833},
     "TERRANUOVA BR.": {"lat": 43.5500, "lon": 11.5833},
-    
-    # ✅ Ferry ports - precise port locations
-    "NAPOLI PORTO": {"lat": 40.8397, "lon": 14.2679},   # Porto di Napoli
+    "NAPOLI PORTO": {"lat": 40.8397, "lon": 14.2679},
     "NAPOLI": {"lat": 40.8397, "lon": 14.2679},
-    "PALERMO PORTO": {"lat": 38.1253, "lon": 13.3588},  # Porto di Palermo
+    "PALERMO PORTO": {"lat": 38.1253, "lon": 13.3588},
     "PALERMO": {"lat": 38.1157, "lon": 13.3615},
-    
     "SAN VITO LO CAPO": {"lat": 38.1747, "lon": 12.7339},
     "SAN VITO": {"lat": 38.1747, "lon": 12.7339},
     "ERICE": {"lat": 38.0372, "lon": 12.5872},
@@ -85,18 +78,20 @@ COORDINATES = {
     "CATANIA": {"lat": 37.5079, "lon": 15.0830},
     "CATANIA - ETNA": {"lat": 37.5079, "lon": 15.0830},
     "ETNA": {"lat": 37.7510, "lon": 14.9934},
-    
-    # ✅ FIXED: Taormina on east coast
     "TAORMINA": {"lat": 37.8526, "lon": 15.2853},
-    # ✅ FIXED: Gole Alcantara - inland, between Taormina and Etna
     "GOLE ALCANTARA": {"lat": 37.8967, "lon": 15.1600},
-    # ✅ FIXED: The leg goes Taormina → Gole Alcantara → Cefalù (north coast)
-    # We use intermediate waypoints for the route display
-    #"TAORMINA - GOLE ALCANTARA - CEFALU": {"lat": 38.0336, "lon": 14.0228},  # destination = Cefalù
-    "CEFALU": {"lat": 38.0336, "lon": 14.0228},  # ✅ Cefalù: north coast
-    
+    "TAORMINA - GOLE ALCANTARA - CEFALU": {"lat": 38.0336, "lon": 14.0228},
+    "CEFALU": {"lat": 38.0336, "lon": 14.0228},
     "FIRENZE": {"lat": 43.7696, "lon": 11.2558},
 }
+
+# ✅ LEGS TO EXCLUDE FROM MAP (return journey)
+MAP_EXCLUDED_LEGS = [
+    ("CEFALU", "PALERMO"),       # return ferry start
+    ("PALERMO PORTO", "NAPOLI PORTO"),  # return ferry sea
+    ("NAPOLI", "FIRENZE"),       # return road
+    ("FIRENZE", "MILANO"),       # return road
+]
 
 # Load data
 df = pd.read_csv(StringIO(csv_data), sep=";")
@@ -105,8 +100,7 @@ df = pd.read_csv(StringIO(csv_data), sep=";")
 st.sidebar.header("🗺️ Trip Navigation")
 st.sidebar.markdown("---")
 
-# Trip statistics
-total_km = int(pd.to_numeric(df['KM'], errors='coerce').sum())
+total_km = pd.to_numeric(df['KM'], errors='coerce').sum()
 total_days = len(df)
 travel_days = df[df['DA'].notna() & (df['DA'] != '')].shape[0]
 
@@ -125,15 +119,15 @@ selected_day = st.sidebar.selectbox(
 # --- MAIN CONTENT ---
 tab1, tab2, tab3 = st.tabs(["📋 Itinerary Table", "🗺️ Interactive Map", "📊 Trip Stats"])
 
-# --- TAB 1: TABLE ---
+# --- TAB 1: TABLE (unchanged, shows everything) ---
 with tab1:
     st.subheader("📋 Complete Itinerary")
-    
+
     if selected_day == "All days":
         display_df = df.copy()
     else:
         display_df = df[df['DATA'] == selected_day].copy()
-    
+
     def highlight_rows(row):
         if row.get('NOTTE') == 'traghetto':
             return ['background-color: #1565C0; color: #FFFFFF; font-weight: bold'] * len(row)
@@ -141,82 +135,87 @@ with tab1:
             return ['background-color: #2E7D32; color: #FFFFFF; font-weight: bold'] * len(row)
         else:
             return ['background-color: #E65100; color: #FFFFFF; font-weight: bold'] * len(row)
-    
-    styled_df = display_df.style.apply(highlight_rows, axis=1).format({"KM": lambda x: str(int(x)) if pd.notna(x) and x != '' else ''})
+
+    styled_df = display_df.style.apply(highlight_rows, axis=1).format(
+        {"KM": lambda x: str(int(x)) if pd.notna(x) and x != '' else ''}
+    )
     st.dataframe(styled_df, use_container_width=True, height=600)
-    
+
     st.markdown("""
     **Legend:**
     - 🟠 **Orange**: Travel day
-    - 🟢 **Green**: Rest/Stay day  
+    - 🟢 **Green**: Rest/Stay day
     - 🔵 **Blue**: Ferry crossing
     """)
 
-# --- TAB 2: MAP ---
+# --- TAB 2: MAP (Sicily + outward journey only) ---
 with tab2:
-    st.subheader("🗺️ Trip Route on Map")
-    
-    # ✅ Build stops - use display names mapped to correct coords
-    # Special handling: "TAORMINA - GOLE ALCANTARA - CEFALU" destination = CEFALU
-    # but we want to show Taormina and Gole Alcantara as waypoints too
-    
-    DISPLAY_STOPS = {
-        "MILANO": "Milano",
-        "TERRANUOVA BR.": "Terranuova Br.",
-        "NAPOLI PORTO": "Napoli Porto 🚢",
-        "PALERMO": "Palermo 🚢",
-        "SAN VITO LO CAPO": "San Vito Lo Capo",
-        "ERICE - MARSALA": "Erice / Marsala",
-        "MARSALA": "Marsala",
-        "LIDO ROSSELLO": "Lido Rossello",
-        "AGRIGENTO - RAGUSA IBLA": "Agrigento / Ragusa Ibla",
-        "RAGUSA IBLA": "Ragusa Ibla",
-        "MARZAMEMI": "Marzamemi",
-        "NOTO": "Noto",
-        "SIRACUSA": "Siracusa",
-        "CATANIA - ETNA": "Catania / Etna",
-        "ETNA": "Etna",
-        "TAORMINA": "Taormina",
-        "GOLE ALCANTARA": "Gole Alcantara",
-        "CEFALU": "Cefalù",
-        "NAPOLI": "Napoli 🚢",
-        "FIRENZE": "Firenze",
-    }
+    st.subheader("🗺️ Trip Route on Map - Sicily & Outward Journey")
+
+    # ✅ STOPS: only locations NOT in return journey
+    RETURN_STOPS = {"NAPOLI", "FIRENZE"}  # exclude these from map stops
 
     stops = []
     seen = set()
 
-    for _, row in df.iterrows():
-        dest = row['A'] if pd.notna(row['A']) and row['A'] != '' else None
-        origin = row['DA'] if pd.notna(row['DA']) and row['DA'] != '' else None
+    # Fixed stop list for map - outward + Sicily only
+    MAP_STOPS_ORDER = [
+        "MILANO",
+        "TERRANUOVA BR.",
+        "NAPOLI PORTO",
+        "PALERMO",
+        "SAN VITO LO CAPO",
+        "ERICE - MARSALA",
+        "MARSALA",
+        "LIDO ROSSELLO",
+        "AGRIGENTO - RAGUSA IBLA",
+        "RAGUSA IBLA",
+        "MARZAMEMI",
+        "NOTO",
+        "SIRACUSA",
+        "CATANIA - ETNA",
+        "ETNA",
+        "TAORMINA",
+        "GOLE ALCANTARA",
+        "CEFALU",
+        "PALERMO PORTO",  # end of Sicily leg
+    ]
 
-        for loc in [origin, dest]:
-            if loc and loc not in seen and loc in COORDINATES:
-                stops.append({
-                    "name": DISPLAY_STOPS.get(loc, loc),
-                    "lat": COORDINATES[loc]["lat"],
-                    "lon": COORDINATES[loc]["lon"],
-                })
-                seen.add(loc)
+    DISPLAY_NAMES = {
+        "MILANO": "Milano 🏠",
+        "TERRANUOVA BR.": "Terranuova Br.",
+        "NAPOLI PORTO": "Napoli Porto 🚢",
+        "PALERMO": "Palermo 🚢",
+        "PALERMO PORTO": "Palermo Porto 🚢",
+        "SAN VITO LO CAPO": "San Vito Lo Capo 🏖️",
+        "ERICE - MARSALA": "Erice / Marsala",
+        "MARSALA": "Marsala 🍷",
+        "LIDO ROSSELLO": "Lido Rossello 🏖️",
+        "AGRIGENTO - RAGUSA IBLA": "Agrigento / Ragusa Ibla",
+        "RAGUSA IBLA": "Ragusa Ibla",
+        "MARZAMEMI": "Marzamemi 🐟",
+        "NOTO": "Noto",
+        "SIRACUSA": "Siracusa",
+        "CATANIA - ETNA": "Catania / Etna 🌋",
+        "ETNA": "Etna 🌋",
+        "TAORMINA": "Taormina",
+        "GOLE ALCANTARA": "Gole Alcantara",
+        "CEFALU": "Cefalù 🏖️",
+    }
 
-    # ✅ Add Taormina and Gole Alcantara as explicit waypoint stops
-    # (they appear in the leg "ETNA → TAORMINA - GOLE ALCANTARA - CEFALU")
-    for waypoint_key, waypoint_label in [("TAORMINA", "Taormina"), ("GOLE ALCANTARA", "Gole Alcantara")]:
-        if waypoint_key not in seen:
+    for loc in MAP_STOPS_ORDER:
+        if loc in COORDINATES:
             stops.append({
-                "name": waypoint_label,
-                "lat": COORDINATES[waypoint_key]["lat"],
-                "lon": COORDINATES[waypoint_key]["lon"],
+                "name": DISPLAY_NAMES.get(loc, loc),
+                "lat": COORDINATES[loc]["lat"],
+                "lon": COORDINATES[loc]["lon"],
             })
-            seen.add(waypoint_key)
 
     stops_df = pd.DataFrame(stops)
 
-    # ✅ FIXED ROUTE LINES
-    # Build route with correct ferry segments and waypoints
+    # ✅ ROUTE LINES: outward + Sicily only, NO return legs
     route_lines = []
 
-    # Helper to add a segment
     def add_segment(from_key, to_key, is_ferry=False, label=""):
         if from_key in COORDINATES and to_key in COORDINATES:
             route_lines.append({
@@ -229,50 +228,32 @@ with tab2:
                 "width": 5 if is_ferry else 3,
             })
 
-    for _, row in df.iterrows():
-        origin = row['DA'] if pd.notna(row['DA']) and row['DA'] != '' else None
-        dest = row['A'] if pd.notna(row['A']) and row['A'] != '' else None
-        notte = row['NOTTE'] if pd.notna(row['NOTTE']) else ''
+    # ✅ Outward road: Milano → Terranuova → Napoli Porto
+    add_segment("MILANO", "TERRANUOVA BR.", False, "Milano → Terranuova Br.")
+    add_segment("TERRANUOVA BR.", "NAPOLI PORTO", False, "Terranuova → Napoli Porto")
 
-        if not origin or not dest:
-            continue
-
-        is_ferry = (notte == 'traghetto')
-
-        # ✅ Special case: ferry Napoli → Palermo (outward)
-        if origin == "TERRANUOVA BR." and dest == "NAPOLI PORTO":
-            add_segment("TERRANUOVA BR.", "NAPOLI PORTO", False, "Terranuova → Napoli Porto")
-            # The ferry night: Napoli Porto → Palermo (implicit, next day starts from Palermo)
-            # We'll add this as a separate ferry arc below
-
-        # ✅ Special case: multi-stop leg Etna → Taormina → Gole Alcantara → Cefalù
-        elif dest == "TAORMINA - GOLE ALCANTARA - CEFALU":
-            add_segment("ETNA", "TAORMINA", False, "Etna → Taormina")
-            add_segment("TAORMINA", "GOLE ALCANTARA", False, "Taormina → Gole Alcantara")
-            add_segment("GOLE ALCANTARA", "CEFALU", False, "Gole Alcantara → Cefalù")
-
-        # ✅ Special case: Cefalù → Palermo ferry (return)
-        elif origin == "CEFALU" and dest == "PALERMO" and is_ferry:
-            add_segment("CEFALU", "PALERMO PORTO", False, "Cefalù → Palermo Porto")
-            # Ferry Palermo → Napoli added below
-
-        else:
-            add_segment(origin, dest, is_ferry, f"{origin} → {dest}")
-
-    # ✅ Add the two ferry crossings explicitly as arcs
-    # Outward: Napoli Porto → Palermo Porto (night of 20 luglio)
+    # ✅ Outward ferry: Napoli → Palermo
     add_segment("NAPOLI PORTO", "PALERMO PORTO", True, "⛴️ Traghetto: Napoli → Palermo")
-    # Return: Palermo Porto → Napoli (night of 6 agosto)  
-    add_segment("PALERMO PORTO", "NAPOLI PORTO", True, "⛴️ Traghetto: Palermo → Napoli")
 
-    # Add Palermo Porto as a stop
-    if "PALERMO PORTO" not in seen:
-        stops.append({
-            "name": "Palermo Porto 🚢",
-            "lat": COORDINATES["PALERMO PORTO"]["lat"],
-            "lon": COORDINATES["PALERMO PORTO"]["lon"],
-        })
-        stops_df = pd.DataFrame(stops)
+    # ✅ Sicily road legs
+    add_segment("PALERMO", "SAN VITO LO CAPO", False, "Palermo → San Vito Lo Capo")
+    add_segment("SAN VITO LO CAPO", "ERICE - MARSALA", False, "San Vito → Erice/Marsala")
+    add_segment("ERICE - MARSALA", "LIDO ROSSELLO", False, "Marsala → Lido Rossello")
+    add_segment("LIDO ROSSELLO", "AGRIGENTO - RAGUSA IBLA", False, "Lido Rossello → Agrigento/Ragusa")
+    add_segment("AGRIGENTO - RAGUSA IBLA", "MARZAMEMI", False, "Ragusa → Marzamemi")
+    add_segment("MARZAMEMI", "NOTO", False, "Marzamemi → Noto")
+    add_segment("NOTO", "SIRACUSA", False, "Noto → Siracusa")
+    add_segment("SIRACUSA", "CATANIA - ETNA", False, "Siracusa → Catania/Etna")
+
+    # ✅ Multi-stop: Etna → Taormina → Gole Alcantara → Cefalù
+    add_segment("ETNA", "TAORMINA", False, "Etna → Taormina")
+    add_segment("TAORMINA", "GOLE ALCANTARA", False, "Taormina → Gole Alcantara")
+    add_segment("GOLE ALCANTARA", "CEFALU", False, "Gole Alcantara → Cefalù")
+
+    # ✅ Cefalù → Palermo Porto (end of Sicily, board return ferry - shown as road)
+    add_segment("CEFALU", "PALERMO PORTO", False, "Cefalù → Palermo Porto")
+
+    # ❌ NO return ferry, NO Napoli→Firenze, NO Firenze→Milano
 
     routes_df = pd.DataFrame(route_lines)
 
@@ -306,7 +287,7 @@ with tab2:
     with col2:
         layers = []
 
-        # Stops layer
+        # Stops
         layers.append(
             pdk.Layer(
                 "ScatterplotLayer",
@@ -319,7 +300,7 @@ with tab2:
             )
         )
 
-        # Labels layer
+        # Labels
         if show_labels:
             layers.append(
                 pdk.Layer(
@@ -335,7 +316,7 @@ with tab2:
                 )
             )
 
-        # Routes layer
+        # Routes
         if show_routes and len(routes_df) > 0:
             layers.append(
                 pdk.Layer(
@@ -349,6 +330,7 @@ with tab2:
                 )
             )
 
+        # ✅ Map centered on Italy to show both Milano and Sicily
         view_state = pdk.ViewState(
             latitude=39.5,
             longitude=14.5,
